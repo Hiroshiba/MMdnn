@@ -123,7 +123,11 @@ class KitModel(nn.Module):
         for code in self.layers_codes.values():
             self.add_body(0, code)
 
-        return self.header_code + '\n' + self.init_code + '\n' + self.body_code
+        code = self.header_code + '\n' + self.init_code + '\n' + self.body_code
+        print('--hiho code--')
+        print(code)
+        print('--hiho code--')
+        return code
 
 
     def _defuse_padding(self, IR_node, extra_str = ""):
@@ -317,7 +321,7 @@ class KitModel(nn.Module):
         input_node = self.parent_variable_name(IR_node)
         if len(self.IR_graph.get_parent(IR_node.name, [0]).get_attr('_output_shapes')[0].dim) > 2:
             input_node = "{}.view({}.size(0), -1)".format(input_node, input_node)
-        
+
         code = "{:<15} = self.{}({})".format(
             IR_node.variable_name,
             IR_node.variable_name,
@@ -339,7 +343,8 @@ class KitModel(nn.Module):
 
 
     def emit_Reshape(self, IR_node):
-        shape_list = IR_node.get_attr('shape')
+        shape_list = list(IR_node.get_attr('shape'))
+        shape_list[1], shape_list[2] = shape_list[2], shape_list[1]
         shape_str = ','.join([str(int(i)) for i in shape_list])
         code = "{:<15} = torch.reshape(input = {}, shape = ({}))".format(
             IR_node.variable_name,
@@ -350,6 +355,13 @@ class KitModel(nn.Module):
 
     def emit_Tanh(self, IR_node):
         code = "{:<15} = F.tanh({})".format(
+            IR_node.variable_name,
+            self.parent_variable_name(IR_node, [0]))
+        return code
+
+
+    def emit_ELU(self, IR_node):
+        code = "{:<15} = F.elu({})".format(
             IR_node.variable_name,
             self.parent_variable_name(IR_node, [0]))
         return code
@@ -400,7 +412,7 @@ class KitModel(nn.Module):
             IR_node.get_attr('input_dim'),   #2-D
             IR_node.get_attr('output_dim')
             ))
-        
+
         code = "{:<15} = self.{}({})".format(
             IR_node.variable_name,
             IR_node.variable_name,
@@ -410,24 +422,85 @@ class KitModel(nn.Module):
 
 
     def emit_RNNs(self, IR_node, func):
-        raise NotImplementedError()
-        # for Keras
-        if "dropout" in IR_node.IR_layer.attr:
-            dropout_str = ",dropout = {}, recurrent_dropout = {}".format(
-                    IR_node.IR_layer.attr['dropout'].f,
-                    IR_node.IR_layer.attr['recurrent_dropout'].f)
-        else:
-            dropout_str = ""
+        self.used_layers.add('RNN')
 
-        code = "{:<15} = {}(units = {}, use_bias = {} {})({})".format(
-                IR_node.name,
-                func,
-                IR_node.IR_layer.attr['units'].i,
-                IR_node.IR_layer.attr['use_bias'].b,
-                dropout_str,
-                IR_node.in_edges[0])
+        input_size = self.IR_graph.get_parent(IR_node.name, [0]).layer.attr['_output_shapes'].list.shape[0].dim[2].size
+
+        pre_code = "{:<15} = {}.permute(2, 0, 1); ".format(
+            self.parent_variable_name(IR_node),
+            self.parent_variable_name(IR_node),
+        )
+        post_code = "; {:<15} = {}.permute(1, 2, 0)".format(
+            IR_node.variable_name,
+            IR_node.variable_name,
+        )
+
+        if IR_node.get_attr('in_features') != None:
+            input_size = IR_node.get_attr('in_features')
+
+        hidden_size = IR_node.get_attr('units')
+
+        self.add_init(2, "self.{} = self.__rnn('{}', mode='{}', input_size={}, hidden_size={}, num_layers=1, dropout={}, bias={}, bidirectional=False)".format(
+            IR_node.variable_name,
+            IR_node.name,
+            func,
+            input_size,
+            hidden_size,
+            IR_node.IR_layer.attr['dropout'].f,
+            IR_node.get_attr('use_bias'),
+        ))
+
+        input_node = self.parent_variable_name(IR_node)
+        code = "{:<15}, _ = self.{}({})".format(
+            IR_node.variable_name,
+            IR_node.variable_name,
+            input_node)
+
+        code = pre_code + code + post_code
+
+        if not IR_node.IR_layer.attr['return_sequences'].b:
+            code += '; {} = {}[:,:,-1]'.format(
+                IR_node.variable_name,
+                IR_node.variable_name,
+            )
+
+        if self.weight_loaded:
+            self.weights_dict[IR_node.name]['gru_recurrent_weights'] = np.transpose(self.weights_dict[IR_node.name]['gru_recurrent_weights'], (1, 0))
+            self.weights_dict[IR_node.name]['gru_weights'] = np.transpose(self.weights_dict[IR_node.name]['gru_weights'], (1, 0))
+
+            arrs = np.split(self.weights_dict[IR_node.name]['gru_recurrent_weights'], 3, axis=0)
+            self.weights_dict[IR_node.name]['gru_recurrent_weights'] = np.concatenate(
+                [arrs[1], arrs[0], arrs[2]],
+                axis=0,
+            )
+
+            arrs = np.split(self.weights_dict[IR_node.name]['gru_weights'], 3, axis=0)
+            self.weights_dict[IR_node.name]['gru_weights'] = np.concatenate(
+                [arrs[1], arrs[0], arrs[2]],
+                axis=0,
+            )
+
+            arrs = np.split(self.weights_dict[IR_node.name]['gru_bias'], 3, axis=0)
+            self.weights_dict[IR_node.name]['gru_bias'] = np.concatenate(
+                [arrs[1], arrs[0], arrs[2]],
+                axis=0,
+            )
 
         return code
+
+
+    def _layer_RNN(self):
+        self.add_body(0, """
+    @staticmethod
+    def __rnn(name, mode, **kwargs):
+        layer = nn.RNNBase(mode=mode, **kwargs)
+
+        layer.state_dict()['weight_ih_l0'].copy_(torch.from_numpy(__weights_dict[name]['gru_weights']))
+        layer.state_dict()['weight_hh_l0'].copy_(torch.from_numpy(__weights_dict[name]['gru_recurrent_weights']))
+        if 'bias' in __weights_dict[name]:
+            layer.state_dict()['bias_ih_l0'].copy_(torch.from_numpy(__weights_dict[name]['gru_bias']))
+            layer.state_dict()['bias_hh_l0'].copy_(torch.from_numpy(np.zeros_like(__weights_dict[name]['gru_bias'])))
+        return layer""")
 
 
     def emit_LSTM(self, IR_node):
@@ -479,7 +552,7 @@ class KitModel(nn.Module):
             code = "self.{:<15} = torch.autograd.Variable(torch.from_numpy(__weights_dict['{}']['value']), requires_grad=False)".format(
                 IR_node.variable_name,
                 IR_node.name)
-        
+
         # self.add_init(2, "self.{:<15} = torch.from_numpy(__weights_dict['{}']['value'])".format(
         #     IR_node.variable_name,
         #     IR_node.name))
@@ -510,12 +583,27 @@ class KitModel(nn.Module):
     def emit_BatchNorm(self, IR_node):
         self.used_layers.add(IR_node.type)
         dim = len(IR_node.layer.attr['_output_shapes'].list.shape[0].dim) - 2
+        axis = IR_node.layer.attr['axis'].i
+
+        rank = IR_node.get_attr('data_format', "NHWC")
+        if rank.index("C") != axis:
+            pre_code = "{:<15} = {}.transpose({}, {}); ".format(
+                self.parent_variable_name(IR_node),
+                self.parent_variable_name(IR_node),
+                "NCHW".index(rank[axis]),
+                1,
+            )
+            post_code = "; {:<15} = {}.transpose({}, {})".format(
+                IR_node.variable_name,
+                IR_node.variable_name,
+                "NCHW".index(rank[axis]),
+                1,
+            )
+        else:
+            pre_code = post_code = ""
 
         output_shape = IR_node.layer.attr['_output_shapes'].list.shape[0]
-        if IR_node.get_attr('data_format', "NHWC") == "NCHW":
-            num_features = output_shape.dim[1].size
-        else:
-            num_features = output_shape.dim[-1].size
+        num_features = output_shape.dim[axis].size
 
         self.add_init(2, "self.{} = self.__batch_normalization({}, '{}', num_features={}, eps={}, momentum={})".format(
              IR_node.variable_name,
@@ -531,7 +619,7 @@ class KitModel(nn.Module):
             IR_node.variable_name,
             self.parent_variable_name(IR_node)
         )
-        return code
+        return pre_code + code + post_code
 
 
     def emit_Scale(self, IR_node):
@@ -674,7 +762,7 @@ class KitModel(nn.Module):
             extra_str += "{}:".format(starts[idx])
             if ends[idx]:
                 extra_str += "{}".format(ends[idx])
-        
+
         shrink_mask = IR_node.get_attr('shrink_axis_mask')
 
         if shrink_mask:
@@ -698,7 +786,7 @@ class KitModel(nn.Module):
         else:
             num_split = IR_node.get_attr('split')
             split_str = "math.ceil({}.shape[{}]/{})".format(
-                self.parent_variable_name(IR_node), 
+                self.parent_variable_name(IR_node),
                 IR_node.get_attr('axis'),
                 num_split)
         code = "{:<15} = torch.split({}, {}, dim={})".format(
@@ -777,10 +865,10 @@ class KitModel(nn.Module):
             IR_node.variable_name,
             self.parent_variable_name(IR_node, [0]),
             IR_node.name)
-        
+
         if self.weight_loaded:
             self.weights_dict[IR_node.name]['weights'] = self.weights_dict[IR_node.name]['gamma']
-        
+
         return code
 
 
@@ -793,7 +881,7 @@ class KitModel(nn.Module):
             dst = 'torch.DoubleTensor'
         elif dstType == 'int':
             dst = 'torch.IntTensor'
-        
+
         code = "{:<15} = {}.type({})".format(
             IR_node.real_variable_name,
             self.parent_variable_name(IR_node),

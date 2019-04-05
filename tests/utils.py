@@ -63,14 +63,25 @@ class CorrectnessTest(unittest.TestCase):
         if (converted_predict is None or original_predict is None) and not need_assert:
             return
 
-        # self.assertEqual(original_predict.shape, converted_predict.shape)
+        if converted_predict.ndim == 3:
+            converted_predict = np.transpose(converted_predict, (0, 2, 1))
+
+        self.assertEqual(original_predict.shape, converted_predict.shape)
+
+        print('hiho final', original_predict.shape, converted_predict.shape)
+
+        for i in range(original_predict.ndim):
+            if original_predict.shape[i] == 1:
+                continue
+            print('axis', i, np.mean(np.abs(original_predict - converted_predict), axis=i).flatten())
+
         original_predict = original_predict.flatten()
         converted_predict = converted_predict.flatten()
         len1 = original_predict.shape[0]
         len2 = converted_predict.shape[0]
         length = min(len1, len2)
-        original_predict = np.sort(original_predict)[::-1]
-        converted_predict = np.sort(converted_predict)[::-1]
+        # original_predict = np.sort(original_predict)[::-1]
+        # converted_predict = np.sort(converted_predict)[::-1]
         original_predict = original_predict[0:length]
         converted_predict = converted_predict[0:length]
         error, ind = _compute_max_relative_error(converted_predict, original_predict)

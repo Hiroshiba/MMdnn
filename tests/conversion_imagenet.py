@@ -2,6 +2,9 @@ from __future__ import absolute_import
 from __future__ import print_function
 
 import os
+
+from mmdnn.conversion.examples.keras.audio_conv_utils import preprocess_input
+
 TEST_ONNX = os.environ.get('TEST_ONNX')
 import sys
 import imp
@@ -411,7 +414,16 @@ class TestModels(CorrectnessTest):
         model_converted.eval()
 
         original_framework = checkfrozen(original_framework)
-        if 'rnn' not in architecture_name:
+        if architecture_name == 'music_tagger_crnn':
+            import librosa
+            import numpy as np
+            filename = librosa.util.example_audio_file()
+            x = preprocess_input(filename).astype('float32')
+            x = np.transpose(x, (2, 0, 1))
+            x = np.expand_dims(x, axis=0)
+            input_data = torch.from_numpy(x)
+            input_data = torch.autograd.Variable(input_data, requires_grad = False)
+        elif 'rnn' not in architecture_name:
             func = TestKit.preprocess_func[original_framework][architecture_name]
             img = func(test_input_path)
             img = np.transpose(img, (2, 0, 1))
@@ -425,7 +437,8 @@ class TestModels(CorrectnessTest):
 
         predict = model_converted(input_data)
         predict = predict.data.numpy()
-        converted_predict = np.squeeze(predict)
+        # converted_predict = np.squeeze(predict)
+        converted_predict = predict
 
         del model_converted
         del sys.modules['PytorchModel']

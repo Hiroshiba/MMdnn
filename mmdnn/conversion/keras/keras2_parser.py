@@ -622,8 +622,17 @@ class Keras2Parser(Parser):
         # units
         IR_node.attr["units"].i = source_node.keras_layer.units
 
-        # activation
-        self._defuse_activation(source_node)
+        # use_bias
+        IR_node.attr["use_bias"].b = source_node.keras_layer.use_bias
+
+        # for Keras, drop_out and recurrent_dropout
+        IR_node.attr["dropout"].f = source_node.keras_layer.dropout
+        IR_node.attr["recurrent_dropout"].f = source_node.keras_layer.recurrent_dropout
+
+        IR_node.attr["return_sequences"].b = source_node.keras_layer.return_sequences
+
+        # # activation
+        # self._defuse_activation(source_node)
 
         # weights
         if self.weight_loaded:

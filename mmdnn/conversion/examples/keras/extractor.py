@@ -1,7 +1,7 @@
-#----------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------
 #  Copyright (c) Microsoft Corporation. All rights reserved.
 #  Licensed under the MIT License. See License.txt in the project root for license information.
-#----------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------
 
 from __future__ import absolute_import
 import os
@@ -10,44 +10,46 @@ from keras import backend as K
 from mmdnn.conversion.examples.imagenet_test import TestKit
 from mmdnn.conversion.examples.extractor import base_extractor
 from mmdnn.conversion.common.utils import download_file
+from mmdnn.conversion.examples.keras.audio_conv_utils import preprocess_input
+from mmdnn.conversion.examples.keras.music_tagger_crnn import MusicTaggerCRNN
 
 
 class keras_extractor(base_extractor):
-
     MMDNN_BASE_URL = 'http://mmdnn.eastasia.cloudapp.azure.com:89/models/'
 
     architecture_map = {
-        'inception_v3'        : lambda : keras.applications.inception_v3.InceptionV3(input_shape=(299, 299, 3)),
-        'vgg16'               : lambda : keras.applications.vgg16.VGG16(),
-        'vgg19'               : lambda : keras.applications.vgg19.VGG19(),
-        'resnet50'            : lambda : keras.applications.resnet50.ResNet50(),
-        'mobilenet'           : lambda : keras.applications.mobilenet.MobileNet(),
-        'xception'            : lambda : keras.applications.xception.Xception(input_shape=(299, 299, 3)),
-        'inception_resnet_v2' : lambda : keras.applications.inception_resnet_v2.InceptionResNetV2(input_shape=(299, 299, 3)),
-        'densenet'            : lambda : keras.applications.densenet.DenseNet201(),
-        'nasnet'              : lambda : keras.applications.nasnet.NASNetLarge()
+        'inception_v3': lambda: keras.applications.inception_v3.InceptionV3(input_shape=(299, 299, 3)),
+        'vgg16': lambda: keras.applications.vgg16.VGG16(),
+        'vgg19': lambda: keras.applications.vgg19.VGG19(),
+        'resnet50': lambda: keras.applications.resnet50.ResNet50(),
+        'mobilenet': lambda: keras.applications.mobilenet.MobileNet(),
+        'xception': lambda: keras.applications.xception.Xception(input_shape=(299, 299, 3)),
+        'inception_resnet_v2': lambda: keras.applications.inception_resnet_v2.InceptionResNetV2(
+            input_shape=(299, 299, 3)),
+        'densenet': lambda: keras.applications.densenet.DenseNet201(),
+        'nasnet': lambda: keras.applications.nasnet.NASNetLarge(),
+        'music_tagger_crnn': lambda: MusicTaggerCRNN(weights='msd')
     }
 
     thirdparty_map = {
-        'yolo2'    : MMDNN_BASE_URL + 'keras/yolo2.h5',
+        'yolo2': MMDNN_BASE_URL + 'keras/yolo2.h5',
     }
 
     image_size = {
-        'inception_v3'      : 299,
-        'vgg16'             : 224,
-        'vgg19'             : 224,
-        'resnet'            : 224,
-        'mobilenet'         : 224,
-        'xception'          : 299,
-        'inception_resnet'  : 299,
-        'densenet'          : 224,
-        'nasnet'            : 331,
+        'inception_v3': 299,
+        'vgg16': 224,
+        'vgg19': 224,
+        'resnet': 224,
+        'mobilenet': 224,
+        'xception': 299,
+        'inception_resnet': 299,
+        'densenet': 224,
+        'nasnet': 331,
     }
 
     @classmethod
     def help(cls):
-        print ('Support frameworks: {}'.format(set().union(cls.architecture_map.keys(), cls.thirdparty_map.keys())))
-
+        print('Support frameworks: {}'.format(set().union(cls.architecture_map.keys(), cls.thirdparty_map.keys())))
 
     @classmethod
     def download(cls, architecture, path="./"):
@@ -72,7 +74,6 @@ class keras_extractor(base_extractor):
         else:
             return None
 
-
     @classmethod
     def inference(cls, architecture, files, path, image_path):
         if architecture in cls.thirdparty_map:
@@ -84,7 +85,15 @@ class keras_extractor(base_extractor):
         else:
             model = None
 
-        if model:
+        if architecture == 'music_tagger_crnn':
+            import librosa
+            import numpy as np
+            filename = librosa.util.example_audio_file()
+            x = preprocess_input(filename)
+            x = np.expand_dims(x, axis=0)
+            predict = model.predict(x)
+            return predict
+        elif model:
             import numpy as np
             func = TestKit.preprocess_func['keras'][architecture]
             img = func(image_path)
